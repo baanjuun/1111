@@ -4,8 +4,8 @@
 # 공개 배포에서는 아래 값을 빈칸으로 두고 Streamlit Settings → Secrets를 사용하세요.
 # 이미 Secrets나 설정 도우미에 키를 등록했다면 아래 두 줄은 그대로 두면 됩니다.
 # ============================================================
-ADMIN_API_KEY = ""
-KAKAO_REST_API_KEY = ""
+ADMIN_API_KEY = "QzAjtfdIGZxHaen63PZDjzL0EU2C6L59A2Wgp4W6bOVwmTsBBYZxx8A4H398SG7MlVmtLPyio0T+a3qp4DifKw=="
+KAKAO_REST_API_KEY = "8cca2475c3e669ff863cce9addb93925"
 
 import os
 import html
@@ -702,7 +702,50 @@ def location_text(region):
             if x
         ]
     )
+# ============================================================
+# 장바구니 기능
+# ============================================================
 
+def _cart_identity(place):
+    url = str(place.get("url") or "").strip()
+    if url:
+        return url
+    name = str(place.get("name") or "").strip()
+    address = str(place.get("address") or "").strip()
+    return f"{name}|{address}"
+
+
+def add_to_cart(place, category=None):
+    if "cart" not in st.session_state:
+        st.session_state["cart"] = []
+    identity = _cart_identity(place)
+    for item in st.session_state["cart"]:
+        if _cart_identity(item) == identity:
+            return False
+    new_item = {
+        "name": str(place.get("name") or "").strip(),
+        "address": str(place.get("address") or "").strip(),
+        "lat": place.get("lat"),
+        "lon": place.get("lon"),
+        "url": str(place.get("url") or "").strip(),
+        "category": category or place.get("main_category") or place.get("category") or "",
+        "identity": identity,
+    }
+    st.session_state["cart"].append(new_item)
+    return True
+
+
+def remove_from_cart(identity):
+    if "cart" not in st.session_state:
+        return
+    st.session_state["cart"] = [
+        item for item in st.session_state["cart"]
+        if _cart_identity(item) != identity
+    ]
+
+
+def clear_cart():
+    st.session_state["cart"] = []
 
 # ============================================================
 # 16. 지도
@@ -767,29 +810,38 @@ def make_map(region, places=None):
 def render_explore(region, api_key):
     st.title("지역 콘텐츠 탐색")
     st.caption("카카오 Local API에서 받은 실제 장소를 검색 조건과 API의 순서대로 보여 줍니다.")
+
+    if "cart" not in st.session_state:
+        st.session_state["cart"] = []
+
     categories = ["맛집", "카페", "관광지", "숙박", "학교", "공원", "문화", "체험"]
     if st.session_state.get("explore_category") not in categories:
         st.session_state["explore_category"] = categories[0]
         st.session_state.pop("explore_search_result", None)
+
     category = st.radio("콘텐츠", categories, horizontal=True, key="explore_category")
     location = location_text(region)
     point = _map_coordinates(region.get("lat"), region.get("lon")) if region.get("coordinates_verified") else None
+
     st.caption(f"선택 지역: {location}")
     if point:
         st.caption("선택한 전체 지역명 + 검색어로, 확인된 지역 기준점 반경 20km 안을 검색해요. 행정구역 경계로 잘라 낸 목록은 아니며 인접 지역이 포함될 수 있어요.")
     else:
         st.caption("지역 기준점의 좌표를 확인하지 못해 전체 지역명 + 검색어로 검색해요. 거리순은 좌표 확인 후 사용할 수 있어요.")
+
     sort_options = {"검색 정확도순": "accuracy"}
     if point:
         sort_options["지역 기준점에서 가까운 순"] = "distance"
-    # 기준점 확인 여부가 바뀌었을 때 이전 선택을 유효한 항목으로 되돌립니다.
     _ensure_region_option("explore_sort", list(sort_options))
+
     with st.form("explore_search_form", enter_to_submit=True):
         query = st.text_input("검색어", value=category,
                               key=f"explore_query_{category}", placeholder="예: 학교, 맛집, 막국수, 카페")
         sort_label = st.selectbox("결과 순서", list(sort_options), key="explore_sort")
         submitted = st.form_submit_button("🔎 검색", type="primary", use_container_width=True)
+
     st.caption("위에서 고른 종류 안에서 검색해요. 다른 종류의 장소를 찾으려면 콘텐츠 버튼을 바꿔 주세요.")
+
     with st.expander("검색 결과 순서는 어떻게 정하나요?", expanded=False):
         st.markdown(
             "**검색 정확도순**은 카카오가 검색어와 조건에 맞는 정도로 반환한 순서예요. "
@@ -799,10 +851,13 @@ def render_explore(region, api_key):
             "**카카오 Local API는 별점과 평가 수를 제공하지 않아 이 앱에서 카카오 별점순 정렬은 지원하지 않습니다.** "
             "각 장소의 ‘카카오맵에서 상세·후기 보기’로 내용을 확인할 수 있어요."
         )
+
     if not api_key:
         st.info("장소 검색을 사용하려면 운영자가 카카오 REST API 키를 서버 설정에 등록해야 해요. 등록 후에는 자동으로 연결됩니다.")
         return
+
     region_key = (region.get("region_code", ""), location, point)
+
     if submitted:
         typed_query = query.strip()
         if not typed_query:
@@ -820,10 +875,12 @@ def render_explore(region, api_key):
             "region_key": region_key, "category": category, "query": typed_query,
             "sort_label": sort_label, "documents": documents, "error": error, "meta": meta,
         }
+
     saved = st.session_state.get("explore_search_result")
     if not saved or saved.get("region_key") != region_key or saved.get("category") != category:
         st.info("검색어와 순서를 고른 뒤 검색을 눌러 주세요.")
         return
+
     documents, error, meta = saved["documents"], saved["error"], saved["meta"]
     if error:
         message = error.get("message", "장소 검색 요청을 처리하지 못했어요.")
@@ -833,52 +890,74 @@ def render_explore(region, api_key):
             st.error(message)
             st.caption("검색 실패는 장소가 0곳이라는 뜻이 아닙니다. 서버의 키·API 권한·호출 한도와 연결 상태를 확인해 주세요.")
             return
+
     frame = kakao_results_dataframe(documents)
     result_order = "카카오 정확도순 검색 결과" if saved["sort_label"] == "검색 정확도순" else "카카오 거리순 검색 결과"
     st.subheader(f"{len(frame):,}/45곳 · {result_order}")
     st.caption(f"검색어: {saved['query']} · 순서: {saved['sort_label']} · 성공적으로 읽은 페이지: {meta.get('pages_fetched', 0)}")
+
     a, b, c = st.columns(3)
     a.metric(result_order, f"{len(frame):,}/45곳", help="같은 장소 ID를 합친 실제 수집 수 / 검색당 최대 45곳입니다.")
     total = meta.get("total_count")
     pageable = meta.get("pageable_count")
     b.metric("API 검색 일치 수", f"{total:,}건" if isinstance(total, int) else "미제공")
     c.metric("API에서 표시 가능한 수", f"{pageable:,}건" if isinstance(pageable, int) else "미제공")
-    st.caption("한 페이지 15건을 다음 페이지까지 읽어 검색당 최대 45건을 받습니다. 같은 장소 ID는 한 번만 표시하며, 이 숫자는 지역 전체 업소 수가 아닙니다. API 검색 일치 수가 커도 API가 공개하는 목록에는 상한이 있어요.")
+    st.caption("한 페이지 15건을 다음 페이지까지 읽어 검색당 최대 45건을 받습니다. 같은 장소 ID는 한 번만 표시하며, 이 숫자는 지역 전체 업소 수가 아닙니다.")
+
     if meta.get("truncated"):
         st.warning("API의 표시 범위 또는 이 검색의 수집 상한 때문에 더 이상 목록을 가져오지 못했어요.")
     elif meta.get("partial") and not error:
         st.warning("검색 페이지 정보를 끝까지 확인하지 못했어요. 아래는 받은 결과만으로 만든 일부 목록입니다.")
     if meta.get("counts_changed"):
         st.caption("페이지를 가져오는 사이 API 검색 일치 수가 바뀌었어요. 표시한 일치 수는 마지막 응답 기준입니다.")
+
     if frame.empty:
         if meta.get("partial"):
             st.info("이번에 받은 응답에서 표시할 장소를 확인하지 못했어요. 검색이 불완전하므로 잠시 후 다시 검색해 주세요.")
         else:
             st.info("이 검색 조건에 일치하는 장소가 없어요. 검색어를 짧게 바꾸거나 다른 콘텐츠 종류를 선택해 보세요.")
         return
+
     frame["main_category"] = category
     digest = hashlib.sha256(json.dumps([region_key, saved["query"], saved["sort_label"], category], ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
     st_folium(make_map(region, frame), key=f"explore_map_{digest}", height=480,
                use_container_width=True, returned_objects=[])
+
     invalid_count = sum(_map_coordinates(row.get("lat"), row.get("lon")) is None for row in frame.to_dict("records"))
     if invalid_count:
         st.caption(f"좌표를 확인할 수 없는 {invalid_count}곳은 목록에만 표시했어요.")
+
     st.subheader(f"장소 목록 · {result_order}")
+
     for index, row in enumerate(frame.to_dict("records"), 1):
         st.markdown(f"### {index}. {_explore_markdown(row.get('name', '장소'))}")
+
         for field, label in (("category", "분류"), ("address", "주소"), ("phone", "전화")):
             value = row.get(field)
             if value and str(value).lower() not in {"nan", "none"}:
                 st.text(f"{label}: {value}")
+
         try:
             distance = float(row.get("distance", ""))
             if point and math.isfinite(distance) and distance >= 0:
                 st.caption(f"지역 기준점과의 거리: {distance:,.0f}m · 도로 이동 거리가 아닙니다.")
         except (TypeError, ValueError, OverflowError):
             pass
-        safe_url = _explore_safe_url(row.get("url", ""))
-        if safe_url:
-            st.link_button("카카오맵에서 상세·후기 보기", safe_url)
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            safe_url = _explore_safe_url(row.get("url", ""))
+            if safe_url:
+                st.link_button("카카오맵에서 상세·후기 보기", safe_url, use_container_width=True)
+        with col2:
+            identity = _cart_identity(row)
+            already_in = any(_cart_identity(item) == identity for item in st.session_state["cart"])
+            if already_in:
+                st.button("✓ 담김", key=f"cart_added_{identity}_{index}", disabled=True, use_container_width=True)
+            else:
+                if st.button("🛒 담기", key=f"cart_add_{identity}_{index}", use_container_width=True):
+                    add_to_cart(row, category=category)
+                    st.rerun()
         st.divider()
 
 
